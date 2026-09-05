@@ -1,0 +1,153 @@
+namespace StockSharp.Tests;
+
+using StockSharp.Algo.Import;
+
+[TestClass]
+public class IbTradesImporterTests : BaseTestClass
+{
+	private const string _header = "Transaction History,Header,Date,Account,Description,Transaction Type,Symbol,Quantity,Price,Price Currency,Gross Amount,Commission,Net Amount";
+
+	private const string _sampleCsv =
+		_header + "\r\n" +
+		"2024-01-10,DU1234567,\"BOT 100 SPY @ 480.00\",Buy,SPY,100,480.00,USD,48000.00,-1.00,47999.00\r\n" +
+		"2024-01-10,DU1234567,\"SLD 100 SPY @ 482.00\",Sell,SPY,100,482.00,USD,48200.00,-1.00,48199.00\r\n" +
+		"2024-01-11,DU1234567,\"BOT 1 SPY 250117C00500000 @ 2.50\",Buy,SPY   250117C00500000,1,2.50,USD,250.00,-0.65,249.35\r\n" +
+		"2024-01-12,DU1234567,Dividends,Other,SPY,0,0.00,USD,0.00,0.00,10.00\r\n";
+
+	private static string WriteCsv(string csv)
+	{
+		var fs = Helper.MemorySystem;
+		var filePath = fs.GetSubTemp("ib_trades.csv");
+
+		using (var stream = fs.OpenWrite(filePath))
+		using (var writer = new StreamWriter(stream))
+			writer.Write(csv);
+
+		return filePath;
+	}
+
+	private static ExecutionMessage[] ParseCsv(string csv)
+	{
+		var parser = new IbTradesCsvParser();
+		var fs = Helper.MemorySystem;
+		var filePath = WriteCsv(csv);
+
+		using var stream = fs.OpenRead(filePath);
+		var msgs = parser.Parse(stream).ToArrayAsync(default).GetAwaiter().GetResult();
+		return [.. msgs.OfType<ExecutionMessage>()];
+	}
+
+	[TestMethod]
+	public async Task Parse_ReadsHeaderAndRows()
+	{
+		var parser = new IbTradesCsvParser();
+		var fs = Helper.MemorySystem;
+		var filePath = WriteCsv(_sampleCsv);
+
+		Message[] msgs;
+
+		using (var stream = fs.OpenRead(filePath))
+			msgs = await parser.Parse(stream).ToArrayAsync(CancellationToken);
+
+		// 2 ETF trades + 1 option SecurityMessage + 1 option trade; the "Other" row is skipped.
+		msgs.Length.AssertEqual(4);
+
+		// --- First trade: SPY buy ---
+		var spyBuy = (ExecutionMessage)msgs[0];
+		spyBuy.DataTypeEx.AssertEqual(DataType.Transactions);
+		spyBuy.SecurityId.SecurityCode.AssertEqual("SPY");
+		spyBuy.ServerTime.AssertEqual(new DateTime(2024, 1, 10));
+		spyBuy.Side.AssertEqual(Sides.Buy);
+		spyBuy.TradePrice.AssertEqual(480m);
+		spyBuy.TradeVolume.AssertEqual(100m);
+		spyBuy.PortfolioName.AssertEqual("DU1234567");
+		spyBuy.Currency.AssertEqual(CurrencyTypes.USD);
+		spyBuy.Commission.AssertEqual(-1m);
+		spyBuy.OrderState.AssertEqual(OrderStates.Done);
+		spyBuy.TradeId.AssertEqual(1L);
+
+		// --- Second trade: SPY sell ---
+		var spySell = (ExecutionMessage)msgs[1];
+		spySell.SecurityId.SecurityCode.AssertEqual("SPY");
+		spySell.Side.AssertEqual(Sides.Sell);
+		spySell.TradePrice.AssertEqual(482m);
+		spySell.TradeId.AssertEqual(2L);
+
+		// --- Option security metadata ---
+		var optSec = (SecurityMessage)msgs[2];
+		optSec.SecurityId.SecurityCode.AssertEqual("SPY 250117C500");
+		optSec.SecurityType.AssertEqual(SecurityTypes.Option);
+		optSec.OptionType.AssertEqual(OptionTypes.Call);
+		optSec.Strike.AssertEqual(500m);
+		optSec.Multiplier.AssertEqual(100);
+		optSec.ExpiryDate.AssertEqual(new DateTime(2025, 1, 17));
+		optSec.UnderlyingSecurityId.SecurityCode.AssertEqual("SPY");
+
+		// --- Option trade ---
+		var optTrade = (ExecutionMessage)msgs[3];
+		optTrade.SecurityId.SecurityCode.AssertEqual("SPY 250117C500");
+		optTrade.Side.AssertEqual(Sides.Buy);
+		optTrade.TradePrice.AssertEqual(2.5m);
+		optTrade.TradeVolume.AssertEqual(1m);
+		optTrade.Commission.AssertEqual(-0.65m);
+		optTrade.TradeId.AssertEqual(3L);
+	}
+
+	[TestMethod]
+	public async Task Import_WritesPerSecurity()
+	{
+		var parser = new IbTradesCsvParser();
+		var fs = Helper.MemorySystem;
+		var filePath = WriteCsv(_sampleCsv);
+
+		var storageRegistry = fs.GetStorage(fs.GetSubTemp());
+
+		var importer = new IbTradesImporter(parser, ServicesRegistry.SecurityStorage, ServicesRegistry.ExchangeInfoProvider, secId => storageRegistry.GetStorage(secId, DataType.Transactions));
+
+		(int count, DateTime? lastTime) result;
+
+		using (var stream = fs.OpenRead(filePath))
+			result = await importer.Import(stream, _ => { }, CancellationToken);
+
+		result.count.AssertEqual(3);
+		result.lastTime.AssertEqual(new DateTime(2024, 1, 11));
+
+		// SPY ETF trades are stored separately from the option trades.
+		var spySecId = new SecurityId { SecurityCode = "SPY", BoardCode = SecurityId.AssociatedBoardCode };
+		var optSecId = new SecurityId { SecurityCode = "SPY 250117C500", BoardCode = SecurityId.AssociatedBoardCode };
+
+		var spyStorage = storageRegistry.GetStorage(spySecId, DataType.Transactions);
+		var optStorage = storageRegistry.GetStorage(optSecId, DataType.Transactions);
+
+		var spyTrades = await spyStorage.LoadAsync(new DateTime(2024, 1, 10)).OfType<ExecutionMessage>().ToArrayAsync(CancellationToken);
+		var optTrades = await optStorage.LoadAsync(new DateTime(2024, 1, 11)).OfType<ExecutionMessage>().ToArrayAsync(CancellationToken);
+
+		spyTrades.Length.AssertEqual(2);
+		optTrades.Length.AssertEqual(1);
+	}
+
+	[TestMethod]
+	public async Task Parse_HandlesLeadingTitleRows()
+	{
+		var csv = "Trades report generated by IB\r\n" + _sampleCsv;
+
+		var msgs = ParseCsv(csv);
+
+		msgs.Length.AssertEqual(3);
+		msgs[0].SecurityId.SecurityCode.AssertEqual("SPY");
+		msgs[0].Side.AssertEqual(Sides.Buy);
+	}
+
+	[TestMethod]
+	public async Task Parse_SkipsNonTradeRows()
+	{
+		var csv = _header + "\r\n" +
+			"2024-01-10,DU1234567,\"BOT 100 SPY @ 480.00\",Buy,SPY,100,480.00,USD,48000.00,-1.00,47999.00\r\n" +
+			"2024-01-10,DU1234567,Fee,Fees,SPY,0,0.00,USD,0.00,-0.35,-0.35\r\n";
+
+		var msgs = ParseCsv(csv);
+
+		msgs.Length.AssertEqual(1);
+		msgs[0].SecurityId.SecurityCode.AssertEqual("SPY");
+	}
+}

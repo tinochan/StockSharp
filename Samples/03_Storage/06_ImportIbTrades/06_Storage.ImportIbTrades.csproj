@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="..\..\common_samples_net.props" />
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Algo.Import\Algo.Import.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update="sample_ib_trades.csv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

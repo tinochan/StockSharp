@@ -399,6 +399,7 @@
     <Project Path="Samples/03_Storage/03_RemoteSource/03_Storage.RemoteSource.csproj" />
     <Project Path="Samples/03_Storage/04_HydraServerConnect/04_Storage.HydraServerConnect.csproj" />
     <Project Path="Samples/03_Storage/05_HydraServerSaveToLocal/05_Storage.HydraServerSaveToLocal.csproj" />
+    <Project Path="Samples/03_Storage/06_ImportIbTrades/06_Storage.ImportIbTrades.csproj" />
   </Folder>
   <Folder Name="/Samples/04_Indicators/">
     <Project Path="Samples/04_Indicators/01_SimpleSMA/01_Indicators.SimpleSMA.csproj" />

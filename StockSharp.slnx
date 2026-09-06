@@ -410,6 +410,7 @@
     <Project Path="Samples/05_Chart/01_Chart/01_Chart.csproj" />
     <Project Path="Samples/05_Chart/02_ActiveOrders/02_Chart.ActiveOrders.csproj" />
     <Project Path="Samples/05_Chart/03_Performance/03_Chart.Performance.csproj" />
+    <Project Path="Samples/05_Chart/04_PnlCurve/04_Chart.PnlCurve.csproj" />
   </Folder>
   <Folder Name="/Samples/06_Strategies/">
     <Project Path="Samples/06_Strategies/01_HistorySMA/01_Strategies.HistorySMA.csproj" />
